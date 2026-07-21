@@ -76,6 +76,14 @@ header .logo{height:26px;width:auto}
 .kpi-who b{display:block;font-size:12.5px;color:var(--ink);text-transform:none;letter-spacing:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+.usrbox{
+  display:flex;align-items:center;gap:8px;padding-left:12px;margin-left:10px;
+  border-left:1px solid var(--line);
+}
+.usr{
+  font-size:12.5px;font-weight:700;max-width:110px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .navtabs{display:flex;gap:2px;background:var(--bg);padding:3px;border-radius:9px}
 .ntab{padding:5px 13px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--muted)}
 .ntab.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.09)}
@@ -300,6 +308,10 @@ tr.tot td{background:#FAF9F7;font-weight:800;font-size:15px;border-top:2px solid
     <button class="btn sec sm" onclick="openPlantillas()">Plantillas</button>
     <button class="btn sec sm" onclick="openAjustes()">Ajustes</button>
     <div class="kpis" id="kpis"></div>
+    <div class="usrbox">
+      <div class="usr" id="usrNom"></div>
+      <button class="btn sec sm" onclick="salir()" title="Cerrar sesión">Salir</button>
+    </div>
   </header>
 
   <main id="viewOps">
@@ -330,6 +342,20 @@ tr.tot td{background:#FAF9F7;font-weight:800;font-size:15px;border-top:2px solid
 
 <script>
 "use strict";
+
+/* ============================================================
+   ACCESO — configúralo aquí antes de publicar el archivo.
+
+   Escribe entre las comillas el usuario y la clave que tendrá
+   quien use la aplicación. Ejemplo:
+
+       const ACCESO = { user: "angel", pass: "tucson2026" };
+
+   Con esto la aplicación SOLO pide entrar: nadie puede crear
+   usuarios nuevos. Si los dejas vacíos, la primera persona que
+   abra la aplicación en su computadora crea su propio acceso.
+   ============================================================ */
+const ACCESO = { user: "miard", pass: "miard9000" };
 
 /* ================= LOGO ================= */
 /* Logo oficial MIA-RD (wordmark recortado del PDF original, fondo transparente).
@@ -438,7 +464,11 @@ document.addEventListener("keydown",e=>{
 /* ================= ACCESO =================
    La primera vez que se abre, cada quien define su propio usuario y clave.
    Así no hay una contraseña por defecto escrita en el código publicado. */
-function configurado(){ return !!(DB.settings.user && DB.settings.pass); }
+/* Si ACCESO viene definido en el archivo, esas son las credenciales
+   y la pantalla de "crear acceso" nunca aparece. */
+function accesoFijo(){ return !!(ACCESO.user && ACCESO.pass); }
+function credenciales(){ return accesoFijo() ? ACCESO : DB.settings; }
+function configurado(){ const c = credenciales(); return !!(c.user && c.pass); }
 
 function renderLogin(){
   const nuevo = !configurado();
@@ -459,7 +489,7 @@ function renderLogin(){
         Tus datos se guardan solo en esta computadora.<br>Nadie más los ve, ni siquiera desde la misma dirección web.</p>
     ` : `
       <div class="f"><label>Usuario</label>
-        <input id="lgUser" autocomplete="off" value="${esc(DB.settings.user)}" onkeydown="if(event.key==='Enter')$('lgPass').focus()"></div>
+        <input id="lgUser" autocomplete="off" value="${esc(accesoFijo()?"":DB.settings.user)}" onkeydown="if(event.key==='Enter')$('lgPass').focus()"></div>
       <div class="f" style="margin-top:10px"><label>Clave</label>
         <input id="lgPass" type="password" placeholder="••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
       <button class="btn acc" style="width:100%;justify-content:center;margin-top:16px" onclick="doLogin()">Entrar</button>
@@ -477,11 +507,32 @@ function doSetup(){
   entrar();
 }
 function doLogin(){
-  const u=$("lgUser").value.trim(), p=$("lgPass").value, s=DB.settings;
-  if(u===s.user && p===s.pass) entrar();
+  const u=$("lgUser").value.trim(), p=$("lgPass").value, c=credenciales();
+  if(u===c.user && p===c.pass) entrar();
   else toast("Usuario o clave incorrectos");
 }
-function entrar(){ $("login").style.display="none"; $("app").style.display="grid"; boot(); }
+
+/* La sesión sobrevive al refresco de la página y al cierre del navegador.
+   Se renueva con cada entrada y caduca a los 7 días sin usarse. */
+function sesionActiva(){
+  const h = DB.settings.sesionHasta;
+  return !!(h && Date.parse(h) > Date.now());
+}
+function entrar(){
+  DB.settings.sesionHasta = new Date(Date.now() + 7*864e5).toISOString();
+  save();
+  $("login").style.display = "none";
+  $("app").style.display = "grid";
+  boot();
+}
+function salir(){
+  if(!confirm("¿Cerrar sesión?\n\nTus datos quedan guardados en esta computadora.")) return;
+  DB.settings.sesionHasta = null; save();
+  state.cli=null; state.exp=null; state.exp=null; state.view="ops"; state.tab="cot";
+  $("app").style.display = "none";
+  $("login").style.display = "flex";
+  renderLogin();
+}
 
 /* ================= RENDER ================= */
 function renderAll(){
@@ -1402,8 +1453,16 @@ function openAjustes(){
        <div class="f"><label>Email</label><input id="sMail" value="${esc(s.email)}"></div>
        <div class="f"><label>RNC</label><input id="sRnc" value="${esc(s.rnc)}"></div>
        <div class="f"><label>Validez (días)</label><input id="sVal" type="number" value="${s.validez}"></div>
+       ${accesoFijo()?`
+       <div class="f" style="grid-column:1/-1">
+         <label>Acceso</label>
+         <div class="tiny muted" style="border:1px solid var(--line);border-radius:8px;padding:9px 11px;line-height:1.5">
+           Usuario <b>${esc(ACCESO.user)}</b>. La clave está fijada en el archivo de la aplicación
+           y solo se puede cambiar desde ahí.
+         </div>
+       </div>`:`
        <div class="f"><label>Usuario</label><input id="sUsr" value="${esc(s.user)}"></div>
-       <div class="f"><label>Clave</label><input id="sPwd" value="${esc(s.pass)}"></div>
+       <div class="f"><label>Clave</label><input id="sPwd" value="${esc(s.pass)}"></div>`}
      </div>
      <div class="f" style="margin-top:12px"><label>Términos en la cotización</label>
        <textarea id="sTer" style="min-height:90px">${esc(s.terminos)}</textarea></div>
@@ -1423,7 +1482,9 @@ function saveAjustes(){
   s.empresa=$("sEmp").value.trim()||"MIA-RD"; s.moneda=$("sMon").value.trim()||"US$";
   s.tel=$("sTel").value.trim(); s.email=$("sMail").value.trim(); s.rnc=$("sRnc").value.trim();
   s.validez=Number($("sVal").value)||15; s.terminos=$("sTer").value;
-  s.user=$("sUsr").value.trim()||s.user; s.pass=$("sPwd").value||s.pass;
+  if(!accesoFijo()){
+    s.user=$("sUsr").value.trim()||s.user; s.pass=$("sPwd").value||s.pass;
+  }
   closeModal(true); boot(); toast("Ajustes guardados");
 }
 function subirLogo(inp){
@@ -1604,10 +1665,18 @@ function paintLogos(){
   if(l) l.innerHTML = `<div style="height:44px;margin:0 auto;display:flex;justify-content:center">${logoHTML(44)}</div>`;
   $("hdLogo").innerHTML = logoHTML(24);
 }
-function boot(){ paintLogos(); setRango(state.rango==="custom"?"mes":state.rango); setView(state.view); renderAll(); }
+function boot(){
+  paintLogos();
+  $("usrNom").textContent = credenciales().user || "";
+  $("usrNom").title = credenciales().user || "";
+  setRango(state.rango==="custom"?"mes":state.rango);
+  setView(state.view);
+  renderAll();
+}
 
 load();
-renderLogin();
+if(configurado() && sesionActiva()) entrar();   // refrescar la página ya no te saca
+else renderLogin();
 </script>
 </body>
 </html>
