@@ -192,6 +192,13 @@ header{height:62px;flex:none;display:flex;align-items:center;gap:22px;padding:0 
 .card-hd .t{font-weight:800;font-size:15px}
 
 /* ===== HOJA DE COTIZACIÓN ===== */
+.cotcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.cotcard{background:var(--surface);border:1px solid var(--line2);border-radius:14px;padding:16px 17px;cursor:pointer;transition:box-shadow .13s,border-color .13s}
+.cotcard:hover{border-color:var(--accent-border);box-shadow:0 4px 14px oklch(0.55 0.14 255 / .12)}
+.cotcard .numc{font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:-.2px}
+.cotcard .tot{font-family:var(--display);font-weight:700;font-size:24px;letter-spacing:-.6px;margin-top:12px;color:var(--navy-ink)}
+.cotcard .meta{font-size:11.5px;color:var(--muted);margin-top:4px}
+.cotcard .open{font-size:12px;font-weight:700;color:var(--accent-ink);margin-top:12px}
 .cotwrap{display:flex;flex-direction:column;align-items:center;padding:2px 0 30px}
 .cotbar{width:760px;max-width:100%;display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .cotbar .st{padding:5px 11px;border-radius:20px;font-size:11px;font-weight:700;background:var(--amber-soft);color:var(--amber)}
@@ -488,7 +495,7 @@ header{height:62px;flex:none;display:flex;align-items:center;gap:22px;padding:0 
 const ACCESO = { user: "miard", pass: "miard9000" };
 
 /* Versión de la aplicación — se muestra abajo. Súbela en cada actualización. */
-const VERSION = "v1.0";
+const VERSION = "v1.1";
 
 /* ================= LOGO ================= */
 /* Logo oficial MIA-RD (wordmark recortado del PDF original, fondo transparente).
@@ -550,15 +557,35 @@ function seed(){
   };
 }
 
-let DB, state = {cli:null, exp:null, tab:"cot", view:"ops", desde:"", hasta:"", rango:"mes"};
+let DB, state = {cli:null, exp:null, tab:"cot", cotOpen:null, view:"ops", desde:"", hasta:"", rango:"mes"};
 
 function uid(){return Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4)}
 function load(){
   try{ const r = localStorage.getItem(KEY); DB = r ? JSON.parse(r) : seed(); }
   catch(e){ DB = seed(); }
   if(!DB.settings) DB = seed();
+  (DB.expedientes||[]).forEach(migrarCots);
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
+
+/* ---- Un expediente puede tener varias cotizaciones (cards).
+        e.cotizaciones[] + e.cotActiva (id de la que cuenta para totales). ---- */
+function nuevaCot(){
+  const s=DB.settings;
+  const c={id:uid(), numero:"COT-"+String(s.contador).padStart(4,"0"), fecha:today(), lineas:[], notas:""};
+  s.contador++; return c;
+}
+function migrarCots(e){
+  if(!e.cotizaciones){
+    if(e.cotizacion){ if(!e.cotizacion.id) e.cotizacion.id=uid(); e.cotizaciones=[e.cotizacion]; e.cotActiva=e.cotizacion.id; delete e.cotizacion; }
+    else { const c=nuevaCot(); e.cotizaciones=[c]; e.cotActiva=c.id; }
+  }
+  if(!e.cotizaciones.length){ const c=nuevaCot(); e.cotizaciones.push(c); e.cotActiva=c.id; }
+  if(!e.cotActiva || !e.cotizaciones.find(c=>c.id===e.cotActiva)) e.cotActiva=e.cotizaciones[0].id;
+  return e;
+}
+function curCot(e){ migrarCots(e); return e.cotizaciones.find(c=>c.id===e.cotActiva) || e.cotizaciones[0]; }
+function totalCotDe(cot){return (cot.lineas||[]).reduce((s,l)=>s+(Number(l.monto)||0),0)}
 
 /* ================= HELPERS ================= */
 const $ = id => document.getElementById(id);
@@ -585,8 +612,8 @@ function cliente(id){return DB.clientes.find(c=>c.id===id)}
 function expediente(id){return DB.expedientes.find(e=>e.id===id)}
 function expsDe(cid){return DB.expedientes.filter(e=>e.clienteId===cid)}
 
-function totalCot(e){return (e.cotizacion.lineas||[]).reduce((s,l)=>s+(Number(l.monto)||0),0)}
-function totalReal(e){return (e.cotizacion.lineas||[]).reduce((s,l)=>s+(l.real===null||l.real===""?(Number(l.monto)||0):(Number(l.real)||0)),0)}
+function totalCot(e){return (curCot(e).lineas||[]).reduce((s,l)=>s+(Number(l.monto)||0),0)}
+function totalReal(e){return (curCot(e).lineas||[]).reduce((s,l)=>s+(l.real===null||l.real===""?(Number(l.monto)||0):(Number(l.real)||0)),0)}
 function totalPag(e){return (e.pagos||[]).reduce((s,p)=>s+(Number(p.monto)||0),0)}
 function balance(e){return totalReal(e)-totalPag(e)}
 function remPend(e){return (e.recordatorios||[]).filter(r=>!r.hecho)}
@@ -816,9 +843,32 @@ function renderExpedientes(){
   }).join("") : `<div class="empty">Sin expedientes para <b>${esc(c.nombre)}</b>.<br>Presiona <b>Nuevo</b>.</div>`;
 }
 
-function selCliente(id){ state.cli=id; state.exp=null; $("qExp").value=""; renderAll(); }
-function selExpediente(id){ state.exp=id; renderAll(); }
-function setTab(t){ state.tab=t; renderDetalle(); }
+function selCliente(id){ state.cli=id; state.exp=null; state.cotOpen=null; $("qExp").value=""; renderAll(); }
+function selExpediente(id){ state.exp=id; state.cotOpen=null; renderAll(); }
+function setTab(t){ state.tab=t; if(t!=="cot") state.cotOpen=null; renderDetalle(); }
+
+/* ---- Cotizaciones como cards ---- */
+function nuevaCotizacion(eid){
+  const e=expediente(eid); if(!e) return;
+  const c=nuevaCot(); e.cotizaciones.push(c); e.cotActiva=c.id;
+  state.cotOpen=c.id; state.tab="cot";
+  save(); renderDetalle(); toast("Cotización "+c.numero+" creada");
+}
+function abrirCot(eid,cid){
+  const e=expediente(eid); if(!e) return;
+  state.cotOpen=cid; e.cotActiva=cid;
+  save(); renderDetalle();
+}
+function cerrarCot(){ state.cotOpen=null; renderDetalle(); }
+function borrarCot(eid,cid){
+  const e=expediente(eid); if(!e) return;
+  if(e.cotizaciones.length<=1){ toast("El expediente debe tener al menos una cotización"); return; }
+  if(!confirm("¿Eliminar esta cotización?")) return;
+  e.cotizaciones = e.cotizaciones.filter(c=>c.id!==cid);
+  if(e.cotActiva===cid) e.cotActiva=e.cotizaciones[0].id;
+  if(state.cotOpen===cid) state.cotOpen=null;
+  save(); renderDetalle(); renderAll();
+}
 
 /* ---------- Detalle ---------- */
 function renderDetalle(){
@@ -843,7 +893,7 @@ function renderDetalle(){
         </div>
         <div class="dmeta">
           ${e.vin?`<span>VIN ${esc(e.vin)}</span>`:""}
-          <span>${esFact?"Factura "+esc(e.factura.numero):"Cotización "+esc(e.cotizacion.numero)}</span>
+          <span>${esFact?"Factura "+esc(e.factura.numero):"Cotización "+esc(curCot(e).numero)}</span>
           <span>${esc(c?c.nombre:"—")}</span>
         </div>
       </div>
@@ -894,20 +944,59 @@ function varCell(d){
   return `<span class="delta ${d>0?"up":"dn"}">${d>0?"▲":"▼"} ${money(Math.abs(d))}</span>`;
 }
 
+/* Pestaña Cotización: por defecto muestra las CARDS.
+   Al abrir una card se muestran los DETALLES (la hoja editable). */
 function tabCot(e){
-  const L = e.cotizacion.lineas||[];
+  const abierta = state.cotOpen && e.cotizaciones.find(c=>c.id===state.cotOpen);
+  if(!abierta) return cotCards(e);
+  e.cotActiva = state.cotOpen;
+  return cotSheet(e);
+}
+
+function cotCards(e){
+  const esFact = e.factura && e.factura.activa;
+  return `<div style="max-width:1000px">
+    <div class="card-hd" style="border:none;padding:6px 2px 14px">
+      <div class="t">Cotizaciones</div>
+      <button class="btn acc" onclick="nuevaCotizacion('${e.id}')">${ICON.pencil}+ Nueva cotización</button>
+    </div>
+    <div class="cotcards">
+      ${e.cotizaciones.map(c=>{
+        const tc=totalCotDe(c), esActiva=c.id===e.cotActiva;
+        const est = esFact&&esActiva ? ["Facturada","var(--green-soft)","var(--green)"]
+                  : esActiva ? ["Activa","var(--accent-soft)","var(--accent-ink)"]
+                  : ["Borrador","oklch(0.95 0.004 90)","var(--muted)"];
+        return `<div class="cotcard" onclick="abrirCot('${e.id}','${c.id}')">
+          <div class="row" style="justify-content:space-between">
+            <div class="numc">${esc(esFact&&esActiva?e.factura.numero:c.numero)}</div>
+            <span class="badge" style="background:${est[1]};color:${est[2]}">${est[0]}</span>
+          </div>
+          <div class="tot">${money(tc)}</div>
+          <div class="meta">${(c.lineas||[]).length} concepto${(c.lineas||[]).length!==1?"s":""} · ${fshort(c.fecha)}</div>
+          <div class="open">Abrir detalles →</div>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
+}
+
+function cotSheet(e){
+  const L = curCot(e).lineas||[];
   const s = DB.settings, c = cliente(e.clienteId);
   const esFact = e.factura && e.factura.activa;
-  const num = esFact ? e.factura.numero : e.cotizacion.numero;
-  const fecha = esFact ? e.factura.fecha : e.cotizacion.fecha;
+  const num = esFact ? e.factura.numero : curCot(e).numero;
+  const fecha = esFact ? e.factura.fecha : curCot(e).fecha;
   const vence = fecha ? new Date(Date.parse(fecha)+s.validez*864e5).toISOString().slice(0,10) : "";
   const tc = totalCot(e), tr = totalReal(e);
 
   return `<div class="cotwrap">
+    <div style="width:760px;max-width:100%;margin-bottom:12px">
+      <button class="btn sec" onclick="cerrarCot()">← Cotizaciones</button>
+    </div>
     <div class="cotbar">
       <div class="row">
         <span class="st">${esFact?"Factura emitida":"Borrador · sin enviar"}</span>
-        <span class="ed">Última edición ${fdate(e.cotizacion.fecha)}</span>
+        <span class="ed">Última edición ${fdate(curCot(e).fecha)}</span>
       </div>
       <div class="tools">
         <button class="btn sec" onclick="cargarPlantilla('${e.id}')">${ICON.pencil}Cargar plantilla</button>
@@ -956,7 +1045,7 @@ function tabCot(e){
 
       <div class="cotbot">
         <div class="cond"><div class="l">Condiciones</div>
-          <textarea onchange="setCot('${e.id}','notas',this.value)" placeholder="Anticipo, tiempos de entrega, notas para el cliente…">${esc(e.cotizacion.notas||s.terminos||"")}</textarea>
+          <textarea onchange="setCot('${e.id}','notas',this.value)" placeholder="Anticipo, tiempos de entrega, notas para el cliente…">${esc(curCot(e).notas||s.terminos||"")}</textarea>
         </div>
         <div class="cottot">
           <div class="r"><span>Cotizado</span><span class="mono" id="tCot">${money(tc)}</span></div>
@@ -1048,7 +1137,7 @@ function tabDet(e){
     <div class="card" style="padding:20px">
       <div class="t" style="font-weight:800;font-size:15px;margin-bottom:6px">Logística y estatus</div>
       <div class="kv"><span>Estado</span><span>${esc(e.estado)}</span></div>
-      <div class="kv"><span>Documento</span><span>${esFact?"Factura "+esc(e.factura.numero):"Cotización "+esc(e.cotizacion.numero)}</span></div>
+      <div class="kv"><span>Documento</span><span>${esFact?"Factura "+esc(e.factura.numero):"Cotización "+esc(curCot(e).numero)}</span></div>
       <div class="kv"><span>Cliente</span><span>${esc(c?c.nombre:"—")}</span></div>
       <div class="kv"><span>Abonado</span><span>${money(totalPag(e))}</span></div>
       <div class="kv"><span>Balance</span><span style="color:${balance(e)>0?"var(--red)":"var(--green)"}">${money(Math.max(0,balance(e)))}</span></div>
@@ -1138,20 +1227,20 @@ function saveExpediente(){
   const pid = $("mPla").value;
   const pl = DB.plantillas.find(p=>p.id===pid);
   const s = DB.settings;
+  const cot = nuevaCot();
+  cot.lineas = pl ? pl.lineas.map(l=>({concepto:l.concepto, monto:l.monto||0, real:null})) : [];
   const e = {
     id:uid(), clienteId:state.cli, titulo:t, vin:$("mVin").value.trim(),
     detalles:$("mDet").value.trim(), estado:$("mEst").value, creado:today(),
-    cotizacion:{ numero:"COT-"+String(s.contador).padStart(4,"0"), fecha:today(),
-      lineas: pl?pl.lineas.map(l=>({concepto:l.concepto, monto:l.monto||0, real:null})):[], notas:"" },
+    cotizaciones:[cot], cotActiva:cot.id,
     factura:{activa:false, numero:"", fecha:""},
     pagos:[], recordatorios:[]
   };
-  s.contador++;
-  DB.expedientes.unshift(e); state.exp=e.id; state.tab="cot";
+  DB.expedientes.unshift(e); state.exp=e.id; state.tab="cot"; state.cotOpen=null;
   closeModal(true); renderAll(); toast("Expediente creado");
 }
 function setExp(id,k,v){ const e=expediente(id); if(e){ e[k]=v; renderAll(); } }
-function setCot(id,k,v){ const e=expediente(id); if(e){ e.cotizacion[k]=v; save(); } }
+function setCot(id,k,v){ const e=expediente(id); if(e){ curCot(e)[k]=v; save(); } }
 function cambiarEstado(id,v){
   const e=expediente(id); if(!e) return;
   e.estado = v;
@@ -1212,19 +1301,19 @@ function dropCopia(inp){
 }
 function addLinea(id){
   const e=expediente(id);
-  const primera = !e.cotizacion.lineas.length;
-  e.cotizacion.lineas.push({concepto:"",monto:0,real:null});
-  const i = e.cotizacion.lineas.length-1;
+  const primera = !curCot(e).lineas.length;
+  curCot(e).lineas.push({concepto:"",monto:0,real:null});
+  const i = curCot(e).lineas.length-1;
   const body = $("cotBody");
   if(body && !primera){
-    body.insertAdjacentHTML("beforeend", lineaHTML(e, e.cotizacion.lineas[i], i));
+    body.insertAdjacentHTML("beforeend", lineaHTML(e, curCot(e).lineas[i], i));
     const inp = body.querySelector(`tr[data-i="${i}"] input`);
     if(inp) inp.focus();
     save();
   } else renderAll();   // si la tabla estaba vacía, re-render para quitar el placeholder
 }
 function editLinea(id,i,k,v){
-  const e=expediente(id), l=e.cotizacion.lineas[i]; if(!l) return;
+  const e=expediente(id), l=curCot(e).lineas[i]; if(!l) return;
   if(k==="concepto") l.concepto = v;
   else if(k==="real")  l.real = (String(v).trim()===""?null:parseNum(v));
   else                 l.monto = parseNum(v);
@@ -1232,7 +1321,7 @@ function editLinea(id,i,k,v){
   save();
 }
 function syncCot(e, i){
-  const l = e.cotizacion.lineas[i];
+  const l = curCot(e).lineas[i];
   if(l && $("d-"+i)){
     const real = (l.real===null||l.real==="")?null:Number(l.real);
     const d = real===null?null:real-(Number(l.monto)||0);
@@ -1246,7 +1335,7 @@ function syncCot(e, i){
   if($("tGrand")) $("tGrand").textContent = money(esFact?tr:tc);
   renderKPIs(); renderClientes(); renderExpedientes();
 }
-function delLinea(id,i){ const e=expediente(id); e.cotizacion.lineas.splice(i,1); renderAll(); }
+function delLinea(id,i){ const e=expediente(id); curCot(e).lineas.splice(i,1); renderAll(); }
 
 /* ================= PLANTILLAS ================= */
 function cargarPlantilla(id){
@@ -1268,19 +1357,19 @@ function aplicarPlantilla(eid,pid){
   const e = expediente(eid), p = DB.plantillas.find(x=>x.id===pid);
   const repl = $("mRepl") ? $("mRepl").checked : true;
   const nuevas = p.lineas.map(l=>({concepto:l.concepto, monto:Number(l.monto)||0, real:null}));
-  e.cotizacion.lineas = repl ? nuevas : e.cotizacion.lineas.concat(nuevas);
+  curCot(e).lineas = repl ? nuevas : curCot(e).lineas.concat(nuevas);
   closeModal(true); renderAll(); toast("Plantilla aplicada");
 }
 function guardarComoPlantilla(id){
   const e = expediente(id);
-  if(!e.cotizacion.lineas.length){ toast("No hay conceptos que guardar"); return; }
+  if(!curCot(e).lineas.length){ toast("No hay conceptos que guardar"); return; }
   modal("Guardar como plantilla",
     `<div class="f"><label>Nombre de la plantilla</label>
       <input id="mPN" value="Importación de vehículo"></div>
      <label class="row tiny muted" style="margin-top:12px;gap:6px;cursor:pointer">
        <input type="checkbox" id="mPV" style="width:15px;height:15px" checked>
        Guardar también los montos como valores predeterminados</label>
-     <p class="tiny muted" style="margin-top:10px">Los conceptos que se guardarán: ${e.cotizacion.lineas.map(l=>esc(l.concepto)).join(", ")}</p>`,
+     <p class="tiny muted" style="margin-top:10px">Los conceptos que se guardarán: ${curCot(e).lineas.map(l=>esc(l.concepto)).join(", ")}</p>`,
     `<button class="btn sec" onclick="closeModal()">Cancelar</button>
      <button class="btn acc" onclick="savePlantilla('${id}')">Guardar plantilla</button>`);
 }
@@ -1289,7 +1378,7 @@ function savePlantilla(id){
   const nom = $("mPN").value.trim() || "Plantilla sin nombre";
   const conV = $("mPV").checked;
   DB.plantillas.push({id:uid(), nombre:nom,
-    lineas: e.cotizacion.lineas.map(l=>({concepto:l.concepto, monto:conV?(Number(l.monto)||0):0}))});
+    lineas: curCot(e).lineas.map(l=>({concepto:l.concepto, monto:conV?(Number(l.monto)||0):0}))});
   closeModal(true); save(); toast("Plantilla guardada");
 }
 function openPlantillas(){
@@ -1333,7 +1422,7 @@ function nuevaPlantilla(){
 /* ================= PAGOS ================= */
 function nuevoPago(id){
   const e = expediente(id), bal = balance(e);
-  const conceptos = (e.cotizacion.lineas||[]).map(l=>`<option value="${esc(l.concepto)}">`).join("");
+  const conceptos = (curCot(e).lineas||[]).map(l=>`<option value="${esc(l.concepto)}">`).join("");
   modal("Registrar abono",
     `<div class="fgrid">
        <div class="f"><label>Monto *</label><input id="mMonto" inputmode="decimal" placeholder="0.00" onfocus="rawFocus(this)" onblur="fmtBlur(this)"></div>
@@ -1756,11 +1845,11 @@ function importar(inp){
 function imprimir(id){
   const e = expediente(id), c = cliente(e.clienteId), s = DB.settings;
   const esFact = e.factura && e.factura.activa;
-  const L = e.cotizacion.lineas||[];
+  const L = curCot(e).lineas||[];
   const tot = esFact ? totalReal(e) : totalCot(e);
   const tp = totalPag(e), bal = tot - tp;
-  const num = esFact ? e.factura.numero : e.cotizacion.numero;
-  const fecha = esFact ? e.factura.fecha : e.cotizacion.fecha;
+  const num = esFact ? e.factura.numero : curCot(e).numero;
+  const fecha = esFact ? e.factura.fecha : curCot(e).fecha;
   const vence = new Date(Date.parse(fecha)+ s.validez*864e5).toISOString().slice(0,10);
 
   const logo = s.logo
@@ -1858,7 +1947,7 @@ function imprimir(id){
       <div class="totrow bal"><span>Balance pendiente</span><span>${money(Math.max(0,bal))}</span></div>`:""}
   </div></div>
 
-  ${e.cotizacion.notas?`<div class="notas"><b>Notas:</b> ${esc(e.cotizacion.notas)}</div>`:""}
+  ${curCot(e).notas?`<div class="notas"><b>Notas:</b> ${esc(curCot(e).notas)}</div>`:""}
   ${e.detalles?`<div class="notas" style="border-left-color:#9a9aa2"><b>Especificaciones:</b> ${esc(e.detalles)}</div>`:""}
 
   <div class="terms"><b>Términos y condiciones</b>${esc(s.terminos)}</div>
